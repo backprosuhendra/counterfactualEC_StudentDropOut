@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dataset Thyroid Cancer</title>
+    <!-- Bootstrap CSS untuk styling tabel -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .table-responsive {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body class="bg-light py-4">
+    <div class="container-fluid px-4">
+        <h2 class="mb-4 text-center">Dataset Thyroid Cancer</h2>
+
+        <!-- Tabel Fitur (X) -->
+        <div class="card mb-4 shadow-sm">
+            <div class="card-header bg-primary text-white fw-bold">
+                Fitur (X) - 5 Baris Pertama
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    {{ features_table | safe }}
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabel Target (y) -->
+        <div class="card shadow-sm">
+            <div class="card-header bg-success text-white fw-bold">
+                Target (y) - 5 Baris Pertama
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    {{ targets_table | safe }}
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
