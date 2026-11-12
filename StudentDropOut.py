@@ -994,7 +994,7 @@ with tab5:
             st.dataframe(pareto_df,use_container_width=True)
             valid_front = pareto_df[pareto_df["validity"]]
             max_proximity = valid_front["proximity"].max()
-            st.write(max_proximity)
+            # st.write(max_proximity)
             # proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
             # ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
             # indicator = HV(ref_point=ref_point)
