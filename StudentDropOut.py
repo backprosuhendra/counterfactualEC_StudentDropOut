@@ -1003,7 +1003,7 @@ with tab4:
             ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
             indicator = HV(ref_point=ref_point)
             hypervolume = indicator(vf)
-        # st.session_state["valid_front"].append(valid_front.copy())
+        st.session_state["valid_front"].append(vf.copy())
         time_seconds = perf_counter()-start
         st.session_state["arr_hv"].append(hypervolume)
         st.session_state["arr_popSize"].append(int(pop_size))
@@ -1041,7 +1041,6 @@ with tab5:
             st.write("time")
             st.write(st.session_state["time_second"])
             st.success(f"{len(pareto_df)} non-dominated candidates.")
-        
             st.dataframe(pareto_df,use_container_width=True)
             st.write(f"Target-valid candidates on this front: {len(valid_front)} / {len(pareto_df)}")
             if valid_front.empty:
@@ -1086,4 +1085,13 @@ with tab5:
         st.dataframe(final_metrics,use_container_width=True)
         st.subheader("Evolution history")
         st.dataframe(saved["history"],use_container_width=True)
-       
+
+with tab6:
+     experiment = pd.DataFrame({
+         "population size":st.session_state["arr_popSize"],
+         "crossover probabilities": st.session_state["arr_crossoverProb"],
+         "pertubation scale":st.session_state["arr_pertubationScale"],
+         "hypervolume": st.session_state["arr_hv"],
+         "time": st.session_state["time_second"],
+         })
+     st.dataframe(experiment,use_container_width=True)
