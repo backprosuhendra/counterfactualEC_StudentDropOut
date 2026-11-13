@@ -900,6 +900,9 @@ class EvolutionHistory(Callback):
         })
 
 with tab4:
+    # arr_popSize = []
+    # arr_CrossOverProb = []
+    # arr_PertubationScale = []
     st.subheader("NSGA-II parameters")
     with st.form("nsga2_parameters"):
         target_class = st.selectbox(
@@ -922,7 +925,13 @@ with tab4:
         "Mutable": domain.mutable,
         "Mutation Probability": mutation_probabilities
     }),use_container_width=True)
-    objective_names = ["target_loss","validity","proximity"]
+    objective_names = ["target_loss","proximity","sparsity"]
+    if "arr_popSize"not in st.session_state:
+        st.session_state["arr_popSize"] = []
+    if "arr_crossoverProb"not in st.session_state:
+        st.session_state["arr_crossoverProb"] = []
+    if "arr_pertubationScale"not in st.session_state:
+        st.session_state["arr_pertubationScale"] = []
     if run_nsga2:
         problem = CounterfactualProblem(
             model=model,x0=x0.values,target_class=target_class,domain=domain,
@@ -963,13 +972,21 @@ with tab4:
         ],axis=1)
         pareto_df.insert(0,"candidate",[f"CF_{j+1}" for j in range(len(pareto_df))])
         st.session_state["nsga2_result_3obj"] = {
-            "initial": population_,"final_metrics": final_metrics,
-            "pareto_X": pareto_X,"pareto_df": pareto_df,
+            "initial": population_,
+            "final_metrics": final_metrics,
+            "pareto_X": pareto_X,
+            "pareto_df": pareto_df,
             "history": pd.DataFrame(result.algorithm.callback.rows),
             "target_class": target_class,
-            "parameters": {"population_size": int(pop_size),"generations": int(n_generations),
-                           "perturbation_scale": perturbation_scale}
+            "parameters": {
+                "population_size":int(pop_size),
+                "generations": int(n_generations),
+                "perturbation_scale": perturbation_scale,
+                "crossover_probability": crossover_probabilities}
         }
+        st.session_state["arr_popSize"].append(int(pop_size))
+        st.session_state["arr_crossoverProb"].append(crossover_probabilities)
+        st.session_state["arr_pertubationScale"].append(perturbation_scale)
 
     if "nsga2_result_3obj" in st.session_state:
         st.subheader("Initial population")
@@ -990,16 +1007,21 @@ with tab5:
         if pareto_df.empty:
             st.warning("No candidate satisfies KNN plausibility and feature-domain rules. No feasible Pareto front was found in this run.")
         else:
+            
+            st.write(st.session_state["arr_popSize"])
+            st.write(st.session_state["arr_crossoverProb"])
+            st.write(st.session_state["arr_pertubationScale"])
             st.success(f"{len(pareto_df)} non-dominated candidates.")
             st.dataframe(pareto_df,use_container_width=True)
             valid_front = pareto_df[pareto_df["validity"]]
             max_proximity = valid_front["proximity"].max()
-            # st.write(max_proximity)
-            # proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
-            # ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
-            # indicator = HV(ref_point=ref_point)
-            # hypervolume = indicator(valid_front)
-            # st.write(f"HV: {hypervolume}")
+            st.write(max_proximity)
+            proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
+            ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
+            indicator = HV(ref_point=ref_point)
+            vf = valid_front[objective_names].to_numpy(dtype=float)
+            hypervolume = indicator(vf)
+            st.write(f"HV: {hypervolume}")
             st.write(f"Target-valid candidates on this front: {len(valid_front)} / {len(pareto_df)}")
             if valid_front.empty:
                 st.warning("The front contains no target-valid counterfactual in this run.")
