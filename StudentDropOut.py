@@ -1,4 +1,5 @@
 import ssl
+from time import perf_counter
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -932,7 +933,14 @@ with tab4:
         st.session_state["arr_crossoverProb"] = []
     if "arr_pertubationScale"not in st.session_state:
         st.session_state["arr_pertubationScale"] = []
+    if "valid_front"not in st.session_state:
+        st.session_state["valid_front"] = []
+    if "arr_hv"not in st.session_state:
+        st.session_state["arr_hv"] = []
+    if "time_second"not in st.session_state:
+        st.session_state["time_second"] = []
     if run_nsga2:
+        start = perf_counter()
         problem = CounterfactualProblem(
             model=model,x0=x0.values,target_class=target_class,domain=domain,
             preprocessing=preprocessing,knn=knn,k=k,tau=tau,X_train=X_train
@@ -971,6 +979,7 @@ with tab4:
             pd.DataFrame(pareto_X,columns=X.columns),pareto_metrics
         ],axis=1)
         pareto_df.insert(0,"candidate",[f"CF_{j+1}" for j in range(len(pareto_df))])
+        valid_front = pareto_df[pareto_df["validity"]]
         st.session_state["nsga2_result_3obj"] = {
             "initial": population_,
             "final_metrics": final_metrics,
@@ -984,10 +993,23 @@ with tab4:
                 "perturbation_scale": perturbation_scale,
                 "crossover_probability": crossover_probabilities}
         }
+        
+        if valid_front.empty:
+            hypervolume = 0.0
+        else:
+            vf = valid_front[objective_names].to_numpy(dtype=float)
+            max_proximity = valid_front["proximity"].max()
+            proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
+            ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
+            indicator = HV(ref_point=ref_point)
+            hypervolume = indicator(vf)
+        # st.session_state["valid_front"].append(valid_front.copy())
+        time_seconds = perf_counter()-start
+        st.session_state["arr_hv"].append(hypervolume)
         st.session_state["arr_popSize"].append(int(pop_size))
         st.session_state["arr_crossoverProb"].append(crossover_probabilities)
         st.session_state["arr_pertubationScale"].append(perturbation_scale)
-
+        st.session_state["time_second"].append(time_seconds)
     if "nsga2_result_3obj" in st.session_state:
         st.subheader("Initial population")
         st.dataframe(pd.DataFrame(st.session_state["nsga2_result_3obj"]["initial"],columns=X.columns),use_container_width=True)
@@ -1004,24 +1026,23 @@ with tab5:
         st.write("Target:",encoder.inverse_transform([saved["target_class"]])[0])
         # st.write("Run parameters:",saved["parameters"],"Seed:",saved["seed"])
         # st.caption("This is an approximate Pareto front from the final population. Three minimized objectives: target loss, Gower-MAD proximity and sparsity. Feasible means domain + KNN; check validity for target-class success. Path feasibility is not evaluated here.")
+        valid_front = pareto_df.loc[pareto_df["validity"]]
         if pareto_df.empty:
             st.warning("No candidate satisfies KNN plausibility and feature-domain rules. No feasible Pareto front was found in this run.")
         else:
-            
+            st.write("pop size")
             st.write(st.session_state["arr_popSize"])
+            st.write("crossover probability")
             st.write(st.session_state["arr_crossoverProb"])
+            st.write("pertubation scale")
             st.write(st.session_state["arr_pertubationScale"])
+            st.write("hypervolume")
+            st.write(st.session_state["arr_hv"])
+            st.write("time")
+            st.write(st.session_state["time_second"])
             st.success(f"{len(pareto_df)} non-dominated candidates.")
+        
             st.dataframe(pareto_df,use_container_width=True)
-            valid_front = pareto_df[pareto_df["validity"]]
-            max_proximity = valid_front["proximity"].max()
-            st.write(max_proximity)
-            proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
-            ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
-            indicator = HV(ref_point=ref_point)
-            vf = valid_front[objective_names].to_numpy(dtype=float)
-            hypervolume = indicator(vf)
-            st.write(f"HV: {hypervolume}")
             st.write(f"Target-valid candidates on this front: {len(valid_front)} / {len(pareto_df)}")
             if valid_front.empty:
                 st.warning("The front contains no target-valid counterfactual in this run.")
