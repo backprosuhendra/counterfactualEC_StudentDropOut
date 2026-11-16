@@ -915,7 +915,8 @@ with tab4:
         n_generations = st.number_input("Generations",min_value=1,max_value=1000,value=100,step=10)
         crossover_probabilities = st.number_input("Crossover Probability", min_value=0.1,max_value=0.9, step=0.05)
         perturbation_scale = st.number_input("Perturbation scale",min_value=0.01,max_value=2.0,value=0.1,step=0.05)
-        seed = st.number_input("Random seed",min_value=0, value=42, step=1)
+        # seed = st.number_input("Random seed",min_value=0, value=42, step=1)
+        run_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
         run_nsga2 = st.form_submit_button("Run NSGA-II")
     st.subheader("selected instance(X0)")
     st.dataframe(df_x0, use_container_width=True)
@@ -939,14 +940,17 @@ with tab4:
         st.session_state["arr_hv"] = []
     if "time_second"not in st.session_state:
         st.session_state["time_second"] = []
+    if "experiment_runs" not in st.session_state:
+        st.session_state["experiment_runs"] = []
+
     if run_nsga2:
-        start = perf_counter()
+        
         problem = CounterfactualProblem(
             model=model,x0=x0.values,target_class=target_class,domain=domain,
             preprocessing=preprocessing,knn=knn,k=k,tau=tau,X_train=X_train
         )
         sampling = CostumSampling(domain=domain,perturbation_scale=perturbation_scale)
-        population_ = sampling._do(problem,int(pop_size),random_state=np.random.default_rng(int(seed)))
+        population_ = sampling._do(problem,int(pop_size),random_state=np.random.default_rng(run_seed))
         algorithm = NSGA2(
             pop_size=int(pop_size),
             sampling=population_,
@@ -956,12 +960,13 @@ with tab4:
             repair=DomainRepair(domain),
             eliminate_duplicates=True
         )
+        start = perf_counter()
         with st.spinner("Running NSGA-II..."):
             result = minimize(
                 problem,algorithm,termination=("n_gen",int(n_generations)),
-                seed=int(seed), callback= EvolutionHistory(), verbose=False
+                seed=run_seed, callback= EvolutionHistory(), verbose=False
             )
-        
+        time_seconds = perf_counter()-start
         final_population = result.pop.get("X")
         final_metrics = problem.get_metrics(final_population)
         feasible = final_metrics[["plausible","domain_valid"]].all(axis=1).to_numpy()
@@ -993,18 +998,25 @@ with tab4:
                 "perturbation_scale": perturbation_scale,
                 "crossover_probability": crossover_probabilities}
         }
-        
+        vf = valid_front[objective_names].to_numpy(dtype=float)
         if valid_front.empty:
             hypervolume = 0.0
-        else:
-            vf = valid_front[objective_names].to_numpy(dtype=float)
+        else:   
             max_proximity = valid_front["proximity"].max()
             proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
             ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
             indicator = HV(ref_point=ref_point)
             hypervolume = indicator(vf)
+            candidate = valid_front.loc[valid_front["proximity"].idxmax()]
+            st.write({
+                "seed": int(run_seed),
+                "candidate": candidate["candidate"],
+                "max_proximity": float(max_proximity),
+                "proximity_ref": float(proximity_ref),
+                "hypervolume": hypervolume,
+            })
         st.session_state["valid_front"].append(vf.copy())
-        time_seconds = perf_counter()-start
+        
         st.session_state["arr_hv"].append(hypervolume)
         st.session_state["arr_popSize"].append(int(pop_size))
         st.session_state["arr_crossoverProb"].append(crossover_probabilities)
@@ -1030,16 +1042,16 @@ with tab5:
         if pareto_df.empty:
             st.warning("No candidate satisfies KNN plausibility and feature-domain rules. No feasible Pareto front was found in this run.")
         else:
-            st.write("pop size")
-            st.write(st.session_state["arr_popSize"])
-            st.write("crossover probability")
-            st.write(st.session_state["arr_crossoverProb"])
-            st.write("pertubation scale")
-            st.write(st.session_state["arr_pertubationScale"])
-            st.write("hypervolume")
-            st.write(st.session_state["arr_hv"])
-            st.write("time")
-            st.write(st.session_state["time_second"])
+            # st.write("pop size")
+            # st.write(st.session_state["arr_popSize"])
+            # st.write("crossover probability")
+            # st.write(st.session_state["arr_crossoverProb"])
+            # st.write("pertubation scale")
+            # st.write(st.session_state["arr_pertubationScale"])
+            # st.write("hypervolume")
+            # st.write(st.session_state["arr_hv"])
+            # st.write("time")
+            # st.write(st.session_state["time_second"])
             st.success(f"{len(pareto_df)} non-dominated candidates.")
             st.dataframe(pareto_df,use_container_width=True)
             st.write(f"Target-valid candidates on this front: {len(valid_front)} / {len(pareto_df)}")
@@ -1087,11 +1099,47 @@ with tab5:
         st.dataframe(saved["history"],use_container_width=True)
 
 with tab6:
-     experiment = pd.DataFrame({
+    experiment = pd.DataFrame({
          "population size":st.session_state["arr_popSize"],
          "crossover probabilities": st.session_state["arr_crossoverProb"],
          "pertubation scale":st.session_state["arr_pertubationScale"],
          "hypervolume": st.session_state["arr_hv"],
-         "time": st.session_state["time_second"],
-         })
-     st.dataframe(experiment,use_container_width=True)
+         "time": st.session_state["time_second"]})
+    if experiment.empty:
+         st.info("run NSGA-II to see the box plot.")
+    else:
+         # Urutan front sama dengan urutan baris pada DataFrame experiment.
+         fronts = st.session_state["valid_front"]
+
+         max_proximity = max(
+             (front[:, 1].max() for front in fronts if len(front) > 0),
+             default=0.0,
+         )
+         proximity_ref = max_proximity + max(0.10 * max_proximity, 1e-8)
+         ref_point = np.array([1.01, proximity_ref, domain.n + 1])
+         indicator = HV(ref_point=ref_point)
+
+         experiment["HV (shared reference)"] = [
+             float(indicator(front)) if len(front) > 0 else 0.0
+             for front in fronts
+         ]
+
+         config_cols = [
+             "population size",
+             "crossover probabilities",
+             "pertubation scale",
+         ]
+         group_id = experiment.groupby(config_cols, sort=False).ngroup() + 1
+         experiment["Experiment"] = "Exp " + group_id.astype(str)
+
+         fig = px.box(
+             experiment,
+             x="Experiment",
+             y="HV (shared reference)",
+             points="all",
+             hover_data=config_cols + ["time"],
+             title="Hypervolume per experiment",
+         )
+         fig.update_traces(jitter=0.25, pointpos=0)
+         st.plotly_chart(fig, use_container_width=True)
+         st.dataframe(experiment, use_container_width=True)

@@ -79,7 +79,7 @@ def generate_population(pop_size):
 
 popSize = 50
 maxGenerations=200
-lambda1, lambda2 = 5.0, 1.0
+lambda1, lambda2 = 1.0, 5.0
 
 crossoverRate = 0.8
 mutationRate = 0.3
