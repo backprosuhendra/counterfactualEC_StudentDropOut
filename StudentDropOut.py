@@ -917,7 +917,9 @@ with tab4:
         perturbation_scale = st.number_input("Perturbation scale",min_value=0.01,max_value=2.0,value=0.1,step=0.05)
         # seed = st.number_input("Random seed",min_value=0, value=42, step=1)
         run_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
-        run_nsga2 = st.form_submit_button("Run NSGA-II")
+        col1,col2 = st.columns([1,10])
+        run_nsga2 = col1.form_submit_button("Run NSGA-II")
+        run_nsga2_30seed = col2.form_submit_button("Run NSGA-II with 30 different seeds")
     st.subheader("selected instance(X0)")
     st.dataframe(df_x0, use_container_width=True)
     st.caption("Immutable features")
@@ -1004,7 +1006,7 @@ with tab4:
         else:   
             max_proximity = valid_front["proximity"].max()
             proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
-            ref_point = np.array([1.01,proximity_ref,len(domain.names)+1])
+            ref_point = np.array([1.01,1,15])
             indicator = HV(ref_point=ref_point)
             hypervolume = indicator(vf)
             candidate = valid_front.loc[valid_front["proximity"].idxmax()]
@@ -1025,6 +1027,38 @@ with tab4:
     if "nsga2_result_3obj" in st.session_state:
         st.subheader("Initial population")
         st.dataframe(pd.DataFrame(st.session_state["nsga2_result_3obj"]["initial"],columns=X.columns),use_container_width=True)
+
+    if run_nsga2_30seed:
+        num_seed = 30
+        problem = CounterfactualProblem(
+                    model=model,x0=x0.values,target_class=target_class,domain=domain,
+                    preprocessing=preprocessing,knn=knn,k=k,tau=tau,X_train=X_train
+                )
+        sampling = CostumSampling(domain=domain,perturbation_scale=perturbation_scale)
+        for  seed_idx in range(num_seed):
+            population_ = sampling._do(problem,int(pop_size),random_state=np.random.default_rng(seed_idx))
+            algorithm = NSGA2(
+                pop_size=int(pop_size),
+                sampling=population_,
+                crossover=MixedCrossover(domain=domain,crossover_probabilities=crossover_probabilities),
+                mutation=ShapMutation(domain=domain,mutation_probabilities=mutation_probabilities,
+                                        perturbation_scale=perturbation_scale),
+                repair=DomainRepair(domain),
+                eliminate_duplicates=True
+                )
+            start = perf_counter()
+            with st.spinner("Running NSGA-II..."):
+                result = minimize(
+                    problem,algorithm,termination=("n_gen",int(n_generations)),
+                    seed=seed_idx, callback= EvolutionHistory(), verbose=False
+                )
+            time_seconds = perf_counter()-start
+            final_population = result.pop.get("X")
+            final_metrics = problem.get_metrics(final_population)
+            feasible = final_metrics[["plausible","domain_valid"]].all(axis=1).to_numpy()
+            feasible_indices = np.flatnonzero(feasible)
+            
+            
 
 with tab5:
     
