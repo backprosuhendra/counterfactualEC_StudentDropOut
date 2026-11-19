@@ -10,6 +10,7 @@ import plotly.express as px
 import networkx as nx
 
 
+
 from sklearn.datasets import load_iris
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -57,13 +58,14 @@ st.set_page_config(
     layout="wide",
 )
 st.title("Counterfactual explanation for student dropout prediction")
-tab1,tab2,tab3,tab4,tab5, tab6 = st.tabs([
+tab1,tab2,tab3,tab4,tab5, tab6, tab7 = st.tabs([
     "Data",
     "Model",
     "SHAP Values",
     "Counterfactuals",
     "Multi-objective evaluation",
-    "Performance"
+    "Performance",
+    "Pareto Front Graphs"
     ])
 with tab1:
     st.subheader("Dataset")
@@ -1030,34 +1032,111 @@ with tab4:
 
     if run_nsga2_30seed:
         num_seed = 30
+        experiment_name = (f"Exp{len(st.session_state["experiment_runs"])+1}")
+        parameters = {
+            "populationSize":int(pop_size),
+            "generations": int(n_generations),
+            "crossoverProb":crossover_probabilities,
+            "pertubationScale":perturbation_scale,
+        }
+        ref_point = np.array([1.01, 1 ,15])
+        indicator = HV(ref_point=ref_point)
         problem = CounterfactualProblem(
                     model=model,x0=x0.values,target_class=target_class,domain=domain,
                     preprocessing=preprocessing,knn=knn,k=k,tau=tau,X_train=X_train
                 )
         sampling = CostumSampling(domain=domain,perturbation_scale=perturbation_scale)
-        for  seed_idx in range(num_seed):
-            population_ = sampling._do(problem,int(pop_size),random_state=np.random.default_rng(seed_idx))
-            algorithm = NSGA2(
-                pop_size=int(pop_size),
-                sampling=population_,
-                crossover=MixedCrossover(domain=domain,crossover_probabilities=crossover_probabilities),
-                mutation=ShapMutation(domain=domain,mutation_probabilities=mutation_probabilities,
-                                        perturbation_scale=perturbation_scale),
-                repair=DomainRepair(domain),
-                eliminate_duplicates=True
-                )
-            start = perf_counter()
-            with st.spinner("Running NSGA-II..."):
+        run_rows = []
+        best_run = None
+        progress = st.progress(0.0)
+        with st.spinner(f"running{experiment_name} with 30 seeds"):
+            for seed_idx in range(num_seed):
+                population_ = sampling._do(problem,int(pop_size),random_state=np.random.default_rng(seed_idx))
+                algorithm = NSGA2(
+                    pop_size=int(pop_size),
+                    sampling=population_,
+                    crossover=MixedCrossover(domain=domain,crossover_probabilities=crossover_probabilities),
+                    mutation=ShapMutation(domain=domain,mutation_probabilities=mutation_probabilities,
+                                            perturbation_scale=perturbation_scale),
+                    repair=DomainRepair(domain),
+                    eliminate_duplicates=True
+                    )
+                start = perf_counter()
                 result = minimize(
-                    problem,algorithm,termination=("n_gen",int(n_generations)),
-                    seed=seed_idx, callback= EvolutionHistory(), verbose=False
-                )
-            time_seconds = perf_counter()-start
-            final_population = result.pop.get("X")
-            final_metrics = problem.get_metrics(final_population)
-            feasible = final_metrics[["plausible","domain_valid"]].all(axis=1).to_numpy()
-            feasible_indices = np.flatnonzero(feasible)
+                            problem,algorithm,termination=("n_gen",int(n_generations)),
+                            seed=seed_idx, callback= EvolutionHistory(), verbose=False
+                        )
             
+                time_seconds = perf_counter()-start
+                final_population = result.pop.get("X")
+                final_metrics = problem.get_metrics(final_population)
+                feasible = final_metrics[["plausible","domain_valid"]].all(axis=1).to_numpy()
+                feasible_indices = np.flatnonzero(feasible)
+
+                if len(feasible_indices):
+                    objectives=final_metrics.loc[feasible,["target_loss","proximity","sparsity"]].to_numpy()
+                    front = NonDominatedSorting().do(objectives,only_non_dominated_front=True)
+                    pareto_indices=feasible_indices[front]
+                    pareto_indices=pareto_indices[np.argsort(final_metrics.iloc[pareto_indices]["proximity"])]
+                else:
+                    pareto_indices=np.array([],dtype=int)
+
+                pareto_X = final_population[pareto_indices]
+                pareto_metrics = final_metrics.iloc[pareto_indices].reset_index(drop=True)
+                pareto_df = pd.concat([
+                    pd.DataFrame(pareto_X,columns=X.columns),
+                    pareto_metrics
+                ],axis=1)
+                pareto_df.insert(0,"candidate",[f"CF_{j+1}"for j in range(len(pareto_df))])
+                valid_front=pareto_df[pareto_df["validity"]]
+
+                vf=valid_front[objective_names].to_numpy(dtype=float)
+                inside_reference = np.all(vf<ref_point,axis=1)
+                if inside_reference.any():
+                    hypervolume=indicator(vf)
+                else:
+                    hypervolume=0.0
+
+                run_rows.append({
+                    "experiment":experiment_name,
+                    "seed":seed_idx,
+                    "population_size":parameters["populationSize"],
+                    "generations":parameters["generations"],
+                    "crossover_prob":parameters["crossoverProb"],
+                    "pertubation_scale":parameters["pertubationScale"],
+                    "hypervolume":hypervolume,
+                    "time":time_seconds
+                })
+                if best_run is None or hypervolume>best_run["hypervolume"]:
+                    best_run={
+                        "seed":seed_idx,
+                        "hypervolume":hypervolume,
+                        "initial":population_.copy(),
+                        "final_metrics":final_metrics.copy(),
+                        "pareto_df":pareto_df.copy(),
+                        "pareto_X":pareto_X.copy(),
+                        "valid_front":valid_front.copy(),
+                        "history":pd.DataFrame(result.algorithm.callback.rows),
+                        "target_class":target_class,
+                        "parameters":parameters.copy(),
+                        "target_class":target_class
+                    }
+                progress.progress((seed_idx+1)/num_seed)
+
+            st.session_state["experiment_runs"].append({
+                "experiment":experiment_name,
+                "parameters":parameters.copy(),
+                "reference_point":ref_point,
+                "x0":x0.copy(),
+                "target_class":target_class,
+                "runs":run_rows,
+                "best":best_run
+            })
+            st.session_state["nsga2_result_3obj"]=best_run
+            
+            st.success("finish running 30 seeds")
+
+
             
 
 with tab5:
@@ -1133,47 +1212,152 @@ with tab5:
         st.dataframe(saved["history"],use_container_width=True)
 
 with tab6:
-    experiment = pd.DataFrame({
-         "population size":st.session_state["arr_popSize"],
-         "crossover probabilities": st.session_state["arr_crossoverProb"],
-         "pertubation scale":st.session_state["arr_pertubationScale"],
-         "hypervolume": st.session_state["arr_hv"],
-         "time": st.session_state["time_second"]})
-    if experiment.empty:
-         st.info("run NSGA-II to see the box plot.")
+    experiments = st.session_state.get("experiment_runs", [])
+
+    results_df = pd.DataFrame([
+        row
+        for experiment in experiments
+        for row in experiment["runs"]
+    ])
+
+    experiment_order = (
+        results_df["experiment"].drop_duplicates().tolist()
+    )
+
+    fig = px.box(
+        results_df,
+        x="experiment",
+        y="hypervolume",
+        # points="all",
+        hover_data=[
+            "seed",
+            "population_size",
+            "generations",
+            "crossover_prob",
+            "pertubation_scale",
+            "time",
+        ],
+        category_orders={
+            "experiment": experiment_order,
+        },
+        labels={
+            "experiment": "Experiment",
+            "hypervolume": "HV (shared reference)",
+            "population_size": "Population size",
+            "crossover_prob": "Crossover probability",
+            "pertubation_scale": "Perturbation scale",
+            "time": "Time (s)",
+        },
+    )
+
+    fig.update_xaxes(type="category")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(
+        results_df,
+        hide_index=True,
+        use_container_width=True,
+    )
+    # experiment = pd.DataFrame({
+    #      "population size":st.session_state["arr_popSize"],
+    #      "crossover probabilities": st.session_state["arr_crossoverProb"],
+    #      "pertubation scale":st.session_state["arr_pertubationScale"],
+    #      "hypervolume": st.session_state["arr_hv"],
+    #      "time": st.session_state["time_second"]})
+    # if experiment.empty:
+    #      st.info("run NSGA-II to see the box plot.")
+    # else:
+    #      # Urutan front sama dengan urutan baris pada DataFrame experiment.
+    #      fronts = st.session_state["valid_front"]
+
+    #      max_proximity = max(
+    #          (front[:, 1].max() for front in fronts if len(front) > 0),
+    #          default=0.0,
+    #      )
+    #      proximity_ref = max_proximity + max(0.10 * max_proximity, 1e-8)
+    #      ref_point = np.array([1.01, proximity_ref, domain.n + 1])
+    #      indicator = HV(ref_point=ref_point)
+
+    #      experiment["HV (shared reference)"] = [
+    #          float(indicator(front)) if len(front) > 0 else 0.0
+    #          for front in fronts
+    #      ]
+
+    #      config_cols = [
+    #          "population size",
+    #          "crossover probabilities",
+    #          "pertubation scale",
+    #      ]
+    #      group_id = experiment.groupby(config_cols, sort=False).ngroup() + 1
+    #      experiment["Experiment"] = "Exp " + group_id.astype(str)
+
+    #      fig = px.box(
+    #          experiment,
+    #          x="Experiment",
+    #          y="HV (shared reference)",
+    #          points="all",
+    #          hover_data=config_cols + ["time"],
+    #          title="Hypervolume per experiment",
+    #      )
+    #      fig.update_traces(jitter=0.25, pointpos=0)
+    #      st.plotly_chart(fig, use_container_width=True)
+    #      st.dataframe(experiment, use_container_width=True)
+
+with tab7:
+    experiments = st.session_state["experiment_runs"]
+
+    if not experiments:
+        st.info("Run an experiment with 30 seeds first.")
     else:
-         # Urutan front sama dengan urutan baris pada DataFrame experiment.
-         fronts = st.session_state["valid_front"]
+        for experiment in experiments:
+            best = experiment["best"]
+            best_front = best["valid_front"]
 
-         max_proximity = max(
-             (front[:, 1].max() for front in fronts if len(front) > 0),
-             default=0.0,
-         )
-         proximity_ref = max_proximity + max(0.10 * max_proximity, 1e-8)
-         ref_point = np.array([1.01, proximity_ref, domain.n + 1])
-         indicator = HV(ref_point=ref_point)
+            title = (
+                f"{experiment['experiment']} — "
+                f"seed {best['seed']} — "
+                f"HV {best['hypervolume']:.6f}"
+            )
 
-         experiment["HV (shared reference)"] = [
-             float(indicator(front)) if len(front) > 0 else 0.0
-             for front in fronts
-         ]
+            with st.expander(title, expanded=True):
+                st.write(best["parameters"])
 
-         config_cols = [
-             "population size",
-             "crossover probabilities",
-             "pertubation scale",
-         ]
-         group_id = experiment.groupby(config_cols, sort=False).ngroup() + 1
-         experiment["Experiment"] = "Exp " + group_id.astype(str)
+                if best["hypervolume"] == 0.0:
+                    st.info(
+                        "All 30 seeds have HV = 0. "
+                        "The first seed is displayed."
+                    )
 
-         fig = px.box(
-             experiment,
-             x="Experiment",
-             y="HV (shared reference)",
-             points="all",
-             hover_data=config_cols + ["time"],
-             title="Hypervolume per experiment",
-         )
-         fig.update_traces(jitter=0.25, pointpos=0)
-         st.plotly_chart(fig, use_container_width=True)
-         st.dataframe(experiment, use_container_width=True)
+                if best_front.empty:
+                    st.warning(
+                        "This run has no target-valid candidate "
+                        "on its Pareto front."
+                    )
+                else:
+                    st.dataframe(
+                        best_front,
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+                    fig = px.scatter_3d(
+                        best_front,
+                        x="proximity",
+                        y="target_loss",
+                        z="sparsity",
+                        color="sparsity",
+                        hover_name="candidate",
+                        color_continuous_scale="Viridis",
+                        labels={
+                            "proximity": "Gower-MAD proximity",
+                            "target_loss": "Target loss",
+                            "sparsity": "Changed features",
+                        },
+                    )
+
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True,
+                        key=f"best_front_{experiment['experiment']}",
+                    )
