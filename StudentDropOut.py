@@ -1231,7 +1231,7 @@ with tab6:
             results_df,
             x="experiment",
             y="hypervolume",
-            points="all",
+            # points="all",
             hover_data=[
                 "seed",
                 "population_size",
