@@ -1220,89 +1220,49 @@ with tab6:
         for row in experiment["runs"]
     ])
 
-    experiment_order = (
+    if results_df.empty:
+        st.info("dataframe expriment is empty")
+    else:
+        experiment_order = (
         results_df["experiment"].drop_duplicates().tolist()
     )
 
-    fig = px.box(
-        results_df,
-        x="experiment",
-        y="hypervolume",
-        # points="all",
-        hover_data=[
-            "seed",
-            "population_size",
-            "generations",
-            "crossover_prob",
-            "pertubation_scale",
-            "time",
-        ],
-        category_orders={
-            "experiment": experiment_order,
-        },
-        labels={
-            "experiment": "Experiment",
-            "hypervolume": "HV (shared reference)",
-            "population_size": "Population size",
-            "crossover_prob": "Crossover probability",
-            "pertubation_scale": "Perturbation scale",
-            "time": "Time (s)",
-        },
+        fig = px.box(
+            results_df,
+            x="experiment",
+            y="hypervolume",
+            points="all",
+            hover_data=[
+                "seed",
+                "population_size",
+                "generations",
+                "crossover_prob",
+                "pertubation_scale",
+                "time",
+            ],
+            category_orders={
+                "experiment": experiment_order,
+            },
+            labels={
+                "experiment": "Experiment",
+                "hypervolume": "HV (shared reference)",
+                "population_size": "Population size",
+                "crossover_prob": "Crossover probability",
+                "pertubation_scale": "Perturbation scale",
+                "time": "Time (s)",
+            },
     )
 
-    fig.update_xaxes(type="category")
+        fig.update_xaxes(type="category")
 
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
     st.dataframe(
         results_df,
         hide_index=True,
         use_container_width=True,
     )
-    # experiment = pd.DataFrame({
-    #      "population size":st.session_state["arr_popSize"],
-    #      "crossover probabilities": st.session_state["arr_crossoverProb"],
-    #      "pertubation scale":st.session_state["arr_pertubationScale"],
-    #      "hypervolume": st.session_state["arr_hv"],
-    #      "time": st.session_state["time_second"]})
-    # if experiment.empty:
-    #      st.info("run NSGA-II to see the box plot.")
-    # else:
-    #      # Urutan front sama dengan urutan baris pada DataFrame experiment.
-    #      fronts = st.session_state["valid_front"]
 
-    #      max_proximity = max(
-    #          (front[:, 1].max() for front in fronts if len(front) > 0),
-    #          default=0.0,
-    #      )
-    #      proximity_ref = max_proximity + max(0.10 * max_proximity, 1e-8)
-    #      ref_point = np.array([1.01, proximity_ref, domain.n + 1])
-    #      indicator = HV(ref_point=ref_point)
-
-    #      experiment["HV (shared reference)"] = [
-    #          float(indicator(front)) if len(front) > 0 else 0.0
-    #          for front in fronts
-    #      ]
-
-    #      config_cols = [
-    #          "population size",
-    #          "crossover probabilities",
-    #          "pertubation scale",
-    #      ]
-    #      group_id = experiment.groupby(config_cols, sort=False).ngroup() + 1
-    #      experiment["Experiment"] = "Exp " + group_id.astype(str)
-
-    #      fig = px.box(
-    #          experiment,
-    #          x="Experiment",
-    #          y="HV (shared reference)",
-    #          points="all",
-    #          hover_data=config_cols + ["time"],
-    #          title="Hypervolume per experiment",
-    #      )
-    #      fig.update_traces(jitter=0.25, pointpos=0)
-    #      st.plotly_chart(fig, use_container_width=True)
-    #      st.dataframe(experiment, use_container_width=True)
 
 with tab7:
     experiments = st.session_state["experiment_runs"]
@@ -1340,24 +1300,36 @@ with tab7:
                         hide_index=True,
                         use_container_width=True,
                     )
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig,ax = plt.subplots(figsize=(8,4))
+                        points = ax.scatter(best_front["proximity"],best_front["target_loss"],
+                                            c=best_front["sparsity"],cmap="viridis",s=50)
+                        fig.colorbar(points,ax=ax,label="Sparsity (changed features)")
+                        ax.set_xlabel("Gower-MAD proximity")
+                        ax.set_ylabel("Target loss (1 - target probability)")
+                        ax.set_title("Projection of the three-objective Pareto front")
+                        ax.grid(alpha=0.2)
+                        st.pyplot(fig)
+                        plt.close(fig)
+                    with col2:
+                        fig = px.scatter_3d(
+                            best_front,
+                            x="proximity",
+                            y="target_loss",
+                            z="sparsity",
+                            color="sparsity",
+                            hover_name="candidate",
+                            color_continuous_scale="Viridis",
+                            labels={
+                                "proximity": "Gower-MAD proximity",
+                                "target_loss": "Target loss",
+                                "sparsity": "Changed features",
+                            },
+                        )
 
-                    fig = px.scatter_3d(
-                        best_front,
-                        x="proximity",
-                        y="target_loss",
-                        z="sparsity",
-                        color="sparsity",
-                        hover_name="candidate",
-                        color_continuous_scale="Viridis",
-                        labels={
-                            "proximity": "Gower-MAD proximity",
-                            "target_loss": "Target loss",
-                            "sparsity": "Changed features",
-                        },
-                    )
-
-                    st.plotly_chart(
-                        fig,
-                        use_container_width=True,
-                        key=f"best_front_{experiment['experiment']}",
-                    )
+                        st.plotly_chart(
+                            fig,
+                            use_container_width=True,
+                            key=f"best_front_{experiment['experiment']}",
+                        )
