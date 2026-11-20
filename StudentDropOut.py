@@ -1336,5 +1336,7 @@ with tab7:
                         )
                     with open(f"results/{experiment['experiment']}.txt","w", encoding="utf-8") as file:
                         file.write(f"Experiment: {experiment["experiment"]}\n")
+                        file.write(f"seed: {best['seed']}\n")
+                        file.write(f"HV: {best['hypervolume']:.6f}\n")
                         for name, value in best["parameters"].items():
                             file.write(f"{name} : {value} \n")
