@@ -1,0 +1,5 @@
+Experiment: Exp1
+populationSize : 100 
+generations : 100 
+crossoverProb : 0.9 
+pertubationScale : 0.1 

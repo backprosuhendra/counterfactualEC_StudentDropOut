@@ -1310,6 +1310,7 @@ with tab7:
                         ax.set_ylabel("Target loss (1 - target probability)")
                         ax.set_title("Projection of the three-objective Pareto front")
                         ax.grid(alpha=0.2)
+                        fig.savefig(f"results/{experiment["experiment"]}.png", dpi=300,bbox_inches="tight")
                         st.pyplot(fig)
                         plt.close(fig)
                     with col2:
@@ -1333,3 +1334,7 @@ with tab7:
                             use_container_width=True,
                             key=f"best_front_{experiment['experiment']}",
                         )
+                    with open(f"results/{experiment['experiment']}.txt","w", encoding="utf-8") as file:
+                        file.write(f"Experiment: {experiment["experiment"]}\n")
+                        for name, value in best["parameters"].items():
+                            file.write(f"{name} : {value} \n")
