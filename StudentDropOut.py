@@ -677,6 +677,40 @@ domain = FeatureDomain(
     continuous_features=continuous_feature
 )
 
+# class CostumSampling(Sampling):
+#     def __init__(self,x0,actionable_mask,feature_std,increase_mask,decrease_mask,perturbation_scale=0.1):
+#         super().__init__()
+#         self.x0 = np.asarray(x0, dtype=float)
+#         self.actionable_mask = np.asarray(actionable_mask,dtype=bool)
+#         self.feature_std = np.asarray(feature_std, dtype=float)
+#         self.increase_mask = np.asarray(increase_mask, dtype=bool)
+#         self.decrease_mask = np.asarray(decrease_mask, dtype=bool)
+#         self.perturbation_scale = perturbation_scale
+        
+#     def _do(self,problem,n_samples, **kwargs):
+#         samples = np.tile(self.x0,(n_samples,1))
+#         for i in range(n_samples):
+#             for j in range(len(self.x0)):
+#                 if not self.actionable_mask[j]:
+#                     continue
+
+#                 std = self.feature_std[j]
+#                 if not np.isfinite(std) or std <= 0:
+#                     continue
+#                 delta = np.random.normal(
+#                     loc=0,
+#                     scale=self.perturbation_scale*std
+#                 )
+#                 if self.increase_mask[j]:
+#                     delta = abs(delta)
+#                 elif self.decrease_mask[j]:
+#                     delta = -abs(delta)
+#                 samples[i,j] += delta
+#                 # samples[i,j] += np.random.normal(
+#                 #     loc=0,
+#                 #     scale=self.perturbation_scale*std
+#                 # )
+#         return samples
 
 class CostumSampling(Sampling):
     def __init__(self, domain, perturbation_scale=0.1):
@@ -856,44 +890,16 @@ class CounterfactualProblem(Problem):
             (~metrics["domain_valid"]).astype(float)
         ])
 
-def calculate_hv(front_values, ref_point, indicator):
-    inside_reference= np.all(front_values<ref_point,axis=1)
-
-    if not inside_reference.any():
-        return 0.0
-    return float(indicator(front_values[inside_reference]))
 class EvolutionHistory(Callback):
     def __init__(self):
         super().__init__()
         self.rows = []
-        self.ref_point = np.asarray(ref_point,dtype=float)
-        self.indicator= HV(ref_point=self.ref_point)
 
     def notify(self,algorithm):
         feasible = np.all(algorithm.pop.get("G") <= 0,axis=1)
         F = algorithm.pop.get("F")
-        G = algorithm.pop.get("G")
-
-        feasible = np.all(G<=0,axis=1)
-        feasible_idx = np.flatnonzero(feasible)
-        hypervolume = 0
-
-        if feasible_idx.size>0:
-            local_front_idx=NonDominatedSorting().do(
-                F[feasible_idx],
-                only_non_dominated_front=True
-            )
-            front_idx = feasible_idx[local_front_idx]
-
-            front_X = algorithm.pop.get("X")[front_idx]
-            front_metrics=algorithm.problem.get_metrics(front_X)
-            target_valid = front_metrics["validity"].tonumpy(dtype=bool)
-            valid_front_values = F[front_idx][target_valid]
-
-            hypervolume=calculate_hv(valid_front_values, self.ref_point,self.indicator)
         self.rows.append({
             "generation": algorithm.n_gen,
-            "hypervolume": hypervolume,
             "feasible_count": int(feasible.sum()),
             "minimum_constraint_violation": float(algorithm.pop.get("CV").min()),
             "best_feasible_target_loss": float(F[feasible,0].min()) if feasible.any() else np.nan,
@@ -1104,8 +1110,7 @@ with tab4:
                     "crossover_prob":parameters["crossoverProb"],
                     "pertubation_scale":parameters["pertubationScale"],
                     "hypervolume":hypervolume,
-                    "time":time_seconds,
-                    "history":pd.DataFrame(result.algorithm.callback.rows)
+                    "time":time_seconds
                 })
                 if best_run is None or hypervolume>best_run["hypervolume"]:
                     best_run={
@@ -1130,8 +1135,7 @@ with tab4:
                 "x0":x0.copy(),
                 "target_class":target_class,
                 "runs":run_rows,
-                "best":best_run,
-                
+                "best":best_run
             })
             st.session_state["nsga2_result_3obj"]=best_run
             
@@ -1288,17 +1292,9 @@ with tab7:
     experiments = st.session_state["experiment_runs"]
 
     if not experiments:
-        st.info("run the experiment first")
+        st.info("Run an experiment with 30 seeds first.")
     else:
         for experiment in experiments:
-            runs = experiment["runs"]
-            with st.expander(f"{experiment['experiment']}"):
-                if runs:
-                    runsHistory = [run for run in runs if "history" in run]
-                if runsHistory:
-                    run = runsHistory[-1]
-                    st.dataframe(run["history"],use_container_width=True)
-                    
             best = experiment["best"]
             best_front = best["valid_front"]
 
