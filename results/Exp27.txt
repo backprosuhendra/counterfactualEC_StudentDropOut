@@ -1,7 +1,7 @@
 Experiment: Exp27
 seed: 5
-HV: 9.860291
-populationSize : 100 
+HV: 9.979648
+populationSize : 80 
 generations : 100 
-crossoverProb : 0.6 
-pertubationScale : 0.2 
+crossoverProb : 0.3 
+pertubationScale : 0.05 

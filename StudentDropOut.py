@@ -677,40 +677,6 @@ domain = FeatureDomain(
     continuous_features=continuous_feature
 )
 
-# class CostumSampling(Sampling):
-#     def __init__(self,x0,actionable_mask,feature_std,increase_mask,decrease_mask,perturbation_scale=0.1):
-#         super().__init__()
-#         self.x0 = np.asarray(x0, dtype=float)
-#         self.actionable_mask = np.asarray(actionable_mask,dtype=bool)
-#         self.feature_std = np.asarray(feature_std, dtype=float)
-#         self.increase_mask = np.asarray(increase_mask, dtype=bool)
-#         self.decrease_mask = np.asarray(decrease_mask, dtype=bool)
-#         self.perturbation_scale = perturbation_scale
-        
-#     def _do(self,problem,n_samples, **kwargs):
-#         samples = np.tile(self.x0,(n_samples,1))
-#         for i in range(n_samples):
-#             for j in range(len(self.x0)):
-#                 if not self.actionable_mask[j]:
-#                     continue
-
-#                 std = self.feature_std[j]
-#                 if not np.isfinite(std) or std <= 0:
-#                     continue
-#                 delta = np.random.normal(
-#                     loc=0,
-#                     scale=self.perturbation_scale*std
-#                 )
-#                 if self.increase_mask[j]:
-#                     delta = abs(delta)
-#                 elif self.decrease_mask[j]:
-#                     delta = -abs(delta)
-#                 samples[i,j] += delta
-#                 # samples[i,j] += np.random.normal(
-#                 #     loc=0,
-#                 #     scale=self.perturbation_scale*std
-#                 # )
-#         return samples
 
 class CostumSampling(Sampling):
     def __init__(self, domain, perturbation_scale=0.1):
@@ -836,10 +802,15 @@ class CounterfactualProblem(Problem):
         self.k = k
         self.tau = tau
         mad = median_abs_deviation(X_train,axis=0,scale=1.0)
-        # Hybrid Gower-MAD: Gower aggregation/mismatch + Wachter numeric scaling.
-        # epsilon is a numerical safeguard, not a formula attributed to either paper.
-        self.mad_epsilon = 1e-8
-        self.distance_scale = np.maximum(mad,self.mad_epsilon)
+        ##Hybrid Gower-MAD: Gower aggregation/mismatch + Wachter numeric scaling.
+        ##epsilon is a numerical safeguard, not a formula attributed to either paper.
+        # self.mad_epsilon = 1e-8
+        # self.distance_scale = np.maximum(mad,self.mad_epsilon)
+        ## using std instead of epsilon to avoid high number
+        std = np.std(X, axis=0, ddof=0)
+        self.distance_scale = np.where(mad == 0, std, mad)
+        # Fitur konstan memiliki MAD dan STD nol. Hindari pembagian 0/0.
+        self.distance_scale[np.ptp(X, axis=0) == 0] = 1.0
         self.numeric_indices = [j for j,f in enumerate(domain.names) if f not in domain.discrete_names]
         self.discrete_indices = list(domain.allowed_by_index)
 
@@ -885,16 +856,44 @@ class CounterfactualProblem(Problem):
             (~metrics["domain_valid"]).astype(float)
         ])
 
+def calculate_hv(front_values, ref_point, indicator):
+    inside_reference= np.all(front_values<ref_point,axis=1)
+
+    if not inside_reference.any():
+        return 0.0
+    return float(indicator(front_values[inside_reference]))
 class EvolutionHistory(Callback):
     def __init__(self):
         super().__init__()
         self.rows = []
+        self.ref_point = np.asarray(ref_point,dtype=float)
+        self.indicator= HV(ref_point=self.ref_point)
 
     def notify(self,algorithm):
         feasible = np.all(algorithm.pop.get("G") <= 0,axis=1)
         F = algorithm.pop.get("F")
+        G = algorithm.pop.get("G")
+
+        feasible = np.all(G<=0,axis=1)
+        feasible_idx = np.flatnonzero(feasible)
+        hypervolume = 0
+
+        if feasible_idx.size>0:
+            local_front_idx=NonDominatedSorting().do(
+                F[feasible_idx],
+                only_non_dominated_front=True
+            )
+            front_idx = feasible_idx[local_front_idx]
+
+            front_X = algorithm.pop.get("X")[front_idx]
+            front_metrics=algorithm.problem.get_metrics(front_X)
+            target_valid = front_metrics["validity"].tonumpy(dtype=bool)
+            valid_front_values = F[front_idx][target_valid]
+
+            hypervolume=calculate_hv(valid_front_values, self.ref_point,self.indicator)
         self.rows.append({
             "generation": algorithm.n_gen,
+            "hypervolume": hypervolume,
             "feasible_count": int(feasible.sum()),
             "minimum_constraint_violation": float(algorithm.pop.get("CV").min()),
             "best_feasible_target_loss": float(F[feasible,0].min()) if feasible.any() else np.nan,
@@ -913,10 +912,10 @@ with tab4:
             format_func=lambda c: encoder.inverse_transform([c])[0],
             index=len(model.classes_)-2
         )
-        pop_size = st.number_input("Population size",min_value=20,max_value=1000,value=100,step=10)
+        pop_size = st.selectbox("Population Size",options=[30,60,80,100])
         n_generations = st.number_input("Generations",min_value=1,max_value=1000,value=100,step=10)
-        crossover_probabilities = st.number_input("Crossover Probability", min_value=0.1,max_value=0.9, step=0.05)
-        perturbation_scale = st.number_input("Perturbation scale",min_value=0.01,max_value=2.0,value=0.1,step=0.05)
+        crossover_probabilities = st.selectbox("Crossover probability",options=[0.3,0.7,0.9])
+        perturbation_scale = st.selectbox("Pertubation Scale",options=[0.01,0.05,0.1])
         # seed = st.number_input("Random seed",min_value=0, value=42, step=1)
         run_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
         col1,col2 = st.columns([1,10])
@@ -1008,7 +1007,7 @@ with tab4:
         else:   
             max_proximity = valid_front["proximity"].max()
             proximity_ref = max_proximity+ max(0.10 * max_proximity, 1e-8)
-            ref_point = np.array([1.01,1,15])
+            ref_point = np.array([1.01,1,36])
             indicator = HV(ref_point=ref_point)
             hypervolume = indicator(vf)
             candidate = valid_front.loc[valid_front["proximity"].idxmax()]
@@ -1105,7 +1104,8 @@ with tab4:
                     "crossover_prob":parameters["crossoverProb"],
                     "pertubation_scale":parameters["pertubationScale"],
                     "hypervolume":hypervolume,
-                    "time":time_seconds
+                    "time":time_seconds,
+                    "history":pd.DataFrame(result.algorithm.callback.rows)
                 })
                 if best_run is None or hypervolume>best_run["hypervolume"]:
                     best_run={
@@ -1130,7 +1130,8 @@ with tab4:
                 "x0":x0.copy(),
                 "target_class":target_class,
                 "runs":run_rows,
-                "best":best_run
+                "best":best_run,
+                
             })
             st.session_state["nsga2_result_3obj"]=best_run
             
@@ -1155,16 +1156,7 @@ with tab5:
         if pareto_df.empty:
             st.warning("No candidate satisfies KNN plausibility and feature-domain rules. No feasible Pareto front was found in this run.")
         else:
-            # st.write("pop size")
-            # st.write(st.session_state["arr_popSize"])
-            # st.write("crossover probability")
-            # st.write(st.session_state["arr_crossoverProb"])
-            # st.write("pertubation scale")
-            # st.write(st.session_state["arr_pertubationScale"])
-            # st.write("hypervolume")
-            # st.write(st.session_state["arr_hv"])
-            # st.write("time")
-            # st.write(st.session_state["time_second"])
+
             st.success(f"{len(pareto_df)} non-dominated candidates.")
             st.dataframe(pareto_df,use_container_width=True)
             st.write(f"Target-valid candidates on this front: {len(valid_front)} / {len(pareto_df)}")
@@ -1193,12 +1185,6 @@ with tab5:
             plt.close(fig)
             st.subheader("Target-valid subset of the Pareto front")
             st.dataframe(valid_front,use_container_width=True)
-            # st.download_button("Download target-valid Pareto subset (CSV)",
-            #     valid_front.to_csv(index=False).encode("utf-8"),
-            #     file_name="valid_pareto_counterfactuals.csv",mime="text/csv")
-            # st.download_button("Download Pareto candidates (CSV)",
-            #     pareto_df.to_csv(index=False).encode("utf-8"),
-            #     file_name="pareto_counterfactuals.csv",mime="text/csv")
             st.subheader("Feature changes from x0")
             selected_cf = st.selectbox("Candidate",range(len(pareto_df)),
                                       format_func=lambda j: pareto_df.iloc[j]["candidate"])
@@ -1213,49 +1199,83 @@ with tab5:
 
 with tab6:
     experiments = st.session_state.get("experiment_runs", [])
-
     results_df = pd.DataFrame([
         row
         for experiment in experiments
         for row in experiment["runs"]
     ])
+    
 
     if results_df.empty:
         st.info("dataframe expriment is empty")
     else:
-        experiment_order = (
-        results_df["experiment"].drop_duplicates().tolist()
-    )
+   
+        plot_df = results_df.copy()
+
+        group_cols = ["population_size", "crossover_prob", "pertubation_scale"]
+        category_orders = {}
+
+        for col in group_cols:
+            values = pd.to_numeric(plot_df[col], errors="raise")
+            category_orders[col] = [str(v) for v in sorted(values.unique())]
+            plot_df[col] = values.astype(str)
 
         fig = px.box(
-            results_df,
-            x="experiment",
+            plot_df,
+            x="population_size",
             y="hypervolume",
-            # points="all",
-            hover_data=[
-                "seed",
-                "population_size",
-                "generations",
-                "crossover_prob",
-                "pertubation_scale",
-                "time",
-            ],
-            category_orders={
-                "experiment": experiment_order,
-            },
+            color="crossover_prob",
+            facet_col="pertubation_scale",
+            boxmode="group",
+            category_orders=category_orders,
+            color_discrete_sequence=["#0072B2", "#E64D00", "#009E73"],
+            hover_data=["seed", "generations", "time"],
             labels={
-                "experiment": "Experiment",
-                "hypervolume": "HV (shared reference)",
                 "population_size": "Population size",
+                "hypervolume": "HV (shared reference)",
                 "crossover_prob": "Crossover probability",
                 "pertubation_scale": "Perturbation scale",
                 "time": "Time (s)",
             },
-    )
+        )
 
         fig.update_xaxes(type="category")
-
         st.plotly_chart(fig, use_container_width=True)
+    #     experiment_order = (
+    #     results_df["experiment"].drop_duplicates().tolist()
+    # )  
+
+    #     fig = px.box(
+    #         results_df,
+    #         x="experiment",
+    #         y="hypervolume",
+    #         # points="all",
+    #         hover_data=[
+    #             "seed",
+    #             "population_size",
+    #             "generations",
+    #             "crossover_prob",
+    #             "pertubation_scale",
+    #             "time",
+    #         ],
+    #         category_orders={
+    #             "experiment": experiment_order,
+    #         },
+    #         labels={
+    #             "experiment": "Experiment",
+    #             "hypervolume": "HV (shared reference)",
+    #             "population_size": "Population size",
+    #             "crossover_prob": "Crossover probability",
+    #             "pertubation_scale": "Perturbation scale",
+    #             "time": "Time (s)",
+    #         },
+    #         order = "population_size",
+    #         palette = "colorblind"
+    # )
+
+        # fig.update_xaxes(type="category")
+
+        # st.plotly_chart(fig, use_container_width=True)
 
     st.dataframe(
         results_df,
@@ -1268,9 +1288,17 @@ with tab7:
     experiments = st.session_state["experiment_runs"]
 
     if not experiments:
-        st.info("Run an experiment with 30 seeds first.")
+        st.info("run the experiment first")
     else:
         for experiment in experiments:
+            runs = experiment["runs"]
+            with st.expander(f"{experiment['experiment']}"):
+                if runs:
+                    runsHistory = [run for run in runs if "history" in run]
+                if runsHistory:
+                    run = runsHistory[-1]
+                    st.dataframe(run["history"],use_container_width=True)
+                    
             best = experiment["best"]
             best_front = best["valid_front"]
 
@@ -1340,3 +1368,4 @@ with tab7:
                         file.write(f"HV: {best['hypervolume']:.6f}\n")
                         for name, value in best["parameters"].items():
                             file.write(f"{name} : {value} \n")
+                
