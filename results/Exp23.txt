@@ -1,7 +1,7 @@
 Experiment: Exp23
-seed: 10
-HV: 10.052810
-populationSize : 80 
+seed: 28
+HV: 10.066287
+populationSize : 60 
 generations : 100 
-crossoverProb : 0.7 
-pertubationScale : 0.05 
+crossoverProb : 0.5 
+pertubationScale : 0.01 

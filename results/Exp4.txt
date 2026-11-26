@@ -1,7 +1,7 @@
 Experiment: Exp4
-seed: 25
-HV: 9.456938
-populationSize : 30 
+seed: 4
+HV: 9.956137
+populationSize : 100 
 generations : 100 
 crossoverProb : 0.7 
-pertubationScale : 0.1 
+pertubationScale : 0.5 

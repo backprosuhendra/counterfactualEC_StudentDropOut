@@ -920,8 +920,8 @@ with tab4:
         )
         pop_size = st.selectbox("Population Size",options=[30,60,80,100])
         n_generations = st.number_input("Generations",min_value=1,max_value=1000,value=100,step=10)
-        crossover_probabilities = st.selectbox("Crossover probability",options=[0.3,0.7,0.9])
-        perturbation_scale = st.selectbox("Pertubation Scale",options=[0.01,0.05,0.1])
+        crossover_probabilities = st.selectbox("Crossover probability",options=[0.3,0.5,0.7,0.9])
+        perturbation_scale = st.selectbox("Pertubation Scale",options=[0.01,0.05,0.1,0.5])
         # seed = st.number_input("Random seed",min_value=0, value=42, step=1)
         run_seed = int(np.random.default_rng().integers(0, 2**32 - 1))
         col1,col2 = st.columns([1,10])
@@ -1232,7 +1232,7 @@ with tab6:
             facet_col="pertubation_scale",
             boxmode="group",
             category_orders=category_orders,
-            color_discrete_sequence=["#0072B2", "#E64D00", "#009E73"],
+            color_discrete_sequence=["#0072B2", "#E64D00", "#009E73", "#46036A"],
             hover_data=["seed", "generations", "time"],
             labels={
                 "population_size": "Population size",
