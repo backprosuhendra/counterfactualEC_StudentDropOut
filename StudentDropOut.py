@@ -499,10 +499,23 @@ binary_features= [
 continuous_feature = [
     "Previous qualification (grade)",
     "Admission grade",
+    "Curricular units 1st sem (grade)",
+    "Curricular units 2nd sem (grade)",
     "Unemployment rate",
     "Inflation rate",
-    "GDP"
+    "GDP",
 ]
+grade_cols = [
+    "Curricular units 1st sem (grade)",
+    "Curricular units 2nd sem (grade)",
+]
+grades = X_train[grade_cols].to_numpy(dtype=float)
+fractional = ~np.isclose(grades, np.rint(grades), atol=1e-8, rtol=0)
+
+st.write({
+    "Profil training dengan minimal satu nilai semester pecahan":
+        int(fractional.any(axis=1).sum())
+})
 actionable_features = np.array([feature not in immutable_features for feature in ec_features], dtype=bool)
 increaseFeature = np.array([feature in increase_Feature for feature in ec_features], dtype=bool)
 decreaseFeature = np.array([feature in decrease_Feature for feature in ec_features], dtype=bool)
@@ -890,91 +903,127 @@ class CounterfactualProblem(Problem):
             (~metrics["domain_valid"]).astype(float)
         ])
 
-def feasiblePath(pareto_df, G, X_train, domain, preprocessing, knn, k, mean_knn_distances, tau):
-    eligible=(
-        pareto_df["validity"] & pareto_df["domain_valid"] & pareto_df["plausible"]
+def feasiblePath(
+    pareto_df, G, X_train, domain, preprocessing,
+    knn, k, mean_knn_distances, tau
+):
+    # Kandidat akhir harus mencapai kelas target dan memenuhi constraint.
+    eligible = (
+        pareto_df["validity"]
+        & pareto_df["domain_valid"]
+        & pareto_df["plausible"]
     )
-    columns = ["candidate", "target_loss", "target_probability","proximity","sparsity"]
-    ranking = pareto_df.loc[eligible,columns].copy()
-    ranking["path_cost"]=np.inf
-    ranking["n_steps"]=pd.Series(pd.NA, index=ranking.index, dtype="Int64")
-    ranking["path"] = ""
+    columns = [
+        "candidate", "target_loss", "target_probability",
+        "proximity", "sparsity"
+    ]
+    ranking = pareto_df.loc[eligible, columns].copy()
+    ranking["graph_distance"] = np.nan
+    ranking["has_feasible_path"] = False
+    ranking["feasible_path_cost"] = np.nan
+    ranking["feasible_path"] = ""
 
-    train = X_train.loc[:,domain.names].to_numpy(dtype=float)
-    valid_train = domain.is_valid(train)&(mean_knn_distances<= tau)
+    train = X_train.loc[:, domain.names].to_numpy(dtype=float)
+    same_immutable = np.all(
+        np.isclose(
+            train[:, ~domain.mutable],
+            domain.x0[~domain.mutable],
+            atol=1e-8,
+            rtol=0,
+        ),
+        axis=1,
+    )
+    domain_ok = domain.is_valid(train)
+    density_ok = np.asarray(mean_knn_distances) <= tau
+    valid_train = domain_ok & density_ok
 
-    def allowed_step(start,end):
-        delta=end-start
-        return(np.all(delta[domain.increase]>=-1e-8) and np.all(delta[domain.decrease]<=1e-8))
+    first_neighbors = np.asarray(list(G.neighbors("x0")), dtype=int)
 
-    graph = nx.DiGraph()
-    graph.add_node("x0")
-    for a,b,edge in G.edges(data=True):
-        if a=="x0" or b=="x0":
-            neighbor = b if a=="x0" else a
-            if valid_train[neighbor] and allowed_step(domain.x0, train[neighbor]):
-                graph.add_edge("x0",neighbor, weight=edge["weight"])
+    st.write({
+        "k yang digunakan": int(k),
+        "Total profil training": len(train),
+        "Cocok pada semua fitur immutable": int(same_immutable.sum()),
+        "Lolos seluruh aturan domain terhadap x0": int(domain_ok.sum()),
+        "Lolos domain dan plausibility": int(valid_train.sum()),
+        "Tetangga langsung x0 pada G": len(first_neighbors),
+        "Tetangga langsung yang lolos langkah pertama":
+            int(valid_train[first_neighbors].sum()),
+    })
+
+    def allowed_step(start, end):
+        delta = end - start
+        return (
+            np.all(delta[domain.increase] >= -1e-8)
+            and np.all(delta[domain.decrease] <= 1e-8)
+        )
+
+    # Graf berarah untuk memeriksa constraint pada setiap transisi.
+    constrained_graph = nx.DiGraph()
+    constrained_graph.add_node("x0")
+
+    for a, b, edge in G.edges(data=True):
+        if a == "x0" or b == "x0":
+            node = b if a == "x0" else a
+            if valid_train[node] and allowed_step(domain.x0, train[node]):
+                constrained_graph.add_edge("x0", node, weight=edge["weight"])
             continue
-        
+
         if not (valid_train[a] and valid_train[b]):
             continue
-        if allowed_step(train[a],train[b]):
-            graph.add_edge(a,b,weight=edge["weight"])
+
+        if allowed_step(train[a], train[b]):
+            constrained_graph.add_edge(a, b, weight=edge["weight"])
         if allowed_step(train[b], train[a]):
-            graph.add_edge(b,a, weight=edge["weight"])
-        
-    costs, paths=nx.single_source_dijkstra(graph, "x0",weight="weight")
-    st.write({"tetangga x0 pada graph knn asli":G.degree("x0"),
-              "tetangga x0 yang lolos constraint":graph.out_degree("x0"),
-              "node training yang dapat dicapai dari x0":len(costs)-1})
-    feature_names = np.asarray(domain.names)
-    rows = []
+            constrained_graph.add_edge(b, a, weight=edge["weight"])
 
-    for node in G.neighbors("x0"):
-        delta = train[node] - domain.x0
-
-        immutable_changed = feature_names[
-            (~domain.mutable) & (np.abs(delta) > 1e-8)
-        ]
-        wrong_direction = feature_names[
-            (domain.increase & (delta < -1e-8))
-            | (domain.decrease & (delta > 1e-8))
-        ]
-
-        rows.append({
-            "node": node,
-            "immutable berbeda": ", ".join(immutable_changed),
-            "arah dilanggar": ", ".join(wrong_direction),
-            "domain valid": bool(domain.is_valid(train[node])[0]),
-            "mean KNN distance": float(mean_knn_distances[node]),
-            "tau": float(tau),
-            "plausible": bool(mean_knn_distances[node] <= tau),
-            "lolos x0 → node": graph.has_edge("x0", node),
-        })
-
-    st.dataframe(pd.DataFrame(rows), hide_index=True)
-    for idx in ranking.index:
-        cf_frame=pareto_df.loc[[idx],domain.names]
-        cf=cf_frame.to_numpy(dtype=float)[0]
-        cf_scaled=preprocessing.transform(cf_frame)
-        distances,neighbors=knn.kneighbors(cf_scaled,n_neighbors=k)
-
-        options=[
-            (costs[node]+float(dist),int(node)) for node, dist in zip(neighbors[0],distances[0]) if node in costs and allowed_step(train[node],cf)
-        ]
-        if options:
-            cost, last_node=min(options)
-            path = [*paths[last_node],ranking.at[idx,"candidate"]]
-            ranking.at[idx,"path_cost"]=cost
-            ranking.at[idx,"n_steps"]=len(path)-1
-            ranking.at[idx,"path"]="->".join(map(str,path))
-    reachable=np.isfinite(ranking["path_cost"])
-    ranking["reachable"]=reachable
-    ranking.loc[~reachable,"path_cost"]=np.nan
-    ranking["rank"]=(
-        ranking["path_cost"].rank(method="min").astype("Int64")
+    # Sekali pada graf asli untuk ranking.
+    graph_costs = nx.single_source_dijkstra_path_length(
+        G, "x0", weight="weight"
     )
-    return ranking.sort_values(["rank","candidate"],na_position="last").reset_index(drop=True)
+
+    # Sekali pada graf berarah untuk memeriksa keberadaan jalur feasible.
+    feasible_costs, feasible_paths = nx.single_source_dijkstra(
+        constrained_graph, "x0", weight="weight"
+    )
+
+    for idx in ranking.index:
+        cf_frame = pareto_df.loc[[idx], domain.names]
+        cf = cf_frame.to_numpy(dtype=float)[0]
+        distances, neighbors = knn.kneighbors(
+            preprocessing.transform(cf_frame), n_neighbors=k
+        )
+
+        graph_options = []
+        feasible_options = []
+
+        # Kedua perhitungan memakai tetangga dan jarak terakhir yang sama.
+        for node, distance in zip(neighbors[0], distances[0]):
+            node = int(node)
+            distance = float(distance)
+
+            if node in graph_costs:
+                graph_options.append(graph_costs[node] + distance)
+
+            if node in feasible_costs and allowed_step(train[node], cf):
+                feasible_options.append((feasible_costs[node] + distance, node))
+
+        if graph_options:
+            ranking.at[idx, "graph_distance"] = min(graph_options)
+
+        if feasible_options:
+            cost, last_node = min(feasible_options)
+            path = [*feasible_paths[last_node], ranking.at[idx, "candidate"]]
+
+            ranking.at[idx, "has_feasible_path"] = True
+            ranking.at[idx, "feasible_path_cost"] = cost
+            ranking.at[idx, "feasible_path"] = " → ".join(map(str, path))
+
+    ranking["graph_distance_rank"] = (
+        ranking["graph_distance"].rank(method="min").astype("Int64")
+    )
+    return ranking.sort_values(
+        ["graph_distance_rank", "candidate"], na_position="last"
+    ).reset_index(drop=True)
 class EvolutionHistory(Callback):
     def __init__(self):
         super().__init__()
@@ -1275,34 +1324,29 @@ with tab5:
             plt.close(fig)
             st.subheader("Target-valid subset of the Pareto front")
             st.dataframe(valid_front,use_container_width=True)
-            st.subheader("feasible path and counterfactual ranking")
-            ##connectivity check##
-            component_x0 = nx.node_connected_component(G,"x0")
+            st.subheader("Ranking of feasible endpoints by graph distance")
 
-            cf_scaled = preprocessing.transform(valid_front.loc[:,graph_features])
-            cf_neighbors = knn.kneighbors(cf_scaled, n_neighbors=k,return_distance=False)
-
-            n_connected=[
-                sum(int(node) in component_x0 for node in neighbors) for neighbors in cf_neighbors
-            ]
-            st.write({
-                "Tetangga langsung x0": G.degree("x0"),
-                "Node training yang terhubung ke x0": len(component_x0) - 1,
-                "Total node training": len(X_train),
-                "CF yang seharusnya reachable pada G": sum(n > 0 for n in n_connected),
-                "Total CF yang diperiksa": len(n_connected),
-            })
-
-            ranking = feasiblePath(pareto_df,G,X_train,domain,preprocessing,knn,k,mean_knn_distances,tau)
+            ranking = feasiblePath(
+            pareto_df, G, X_train, domain, preprocessing,
+            knn, k, mean_knn_distances, tau
+             )
 
             if ranking.empty:
-                st.info("No pareto candidate satisfies the endpoint constraints")
+                st.info("No Pareto candidate satisfies the endpoint criteria.")
             else:
-                display_columns=["rank","candidate","reachable","path_cost","n_steps",
-                                 "target_probability","target_loss","proximity","sparsity","path"]
-                st.dataframe(ranking[display_columns],use_container_width=True,hide_index=True)
-                n_reachable=int(ranking["reachable"].sum())
-                st.write(f"reachable candidate{n_reachable}/{len(ranking)}")
+                display_columns = [
+                "graph_distance_rank", "candidate", "graph_distance",
+                "has_feasible_path", "feasible_path_cost", "feasible_path",
+                "target_probability", "target_loss", "proximity", "sparsity"
+             ]
+            st.dataframe(ranking[display_columns], use_container_width=True)
+
+            total = len(ranking)
+            n_ranked = ranking["graph_distance_rank"].notna().sum()
+            n_feasible = ranking["has_feasible_path"].sum()
+
+            st.write(f"Candidates ranked by graph distance: {n_ranked}/{total}")
+            st.write(f"Candidates with a constraint-respecting path: {n_feasible}/{total}")
 
 
             st.subheader("Feature changes from x0")
